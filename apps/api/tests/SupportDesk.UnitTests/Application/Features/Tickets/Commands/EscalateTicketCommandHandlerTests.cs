@@ -30,7 +30,7 @@ public class EscalateTicketCommandHandlerTests
             context.Candidates.Object, new TriagePolicy(new SlaSettings()), history.Object, context.UnitOfWork.Object,
             context.Clock, new GetTicketQueryHandler(context.TicketQueries.Object));
 
-        var result = await handler.HandleAsync(ticket.Id, new("Needs attention", "Alex"), default);
+        var result = await handler.HandleAsync(ticket.Id, new("Needs attention"), "Alex", default);
 
         Assert.Equal(context.Clock.UtcNow.AddHours(4), ticket.DueAtUtc); // High 8h, premium half.
         Assert.Equal(expectedOwner, ticket.AssignedAgentId);
@@ -41,21 +41,18 @@ public class EscalateTicketCommandHandlerTests
     }
 
     [Theory]
-    [InlineData("tiny", "Alex", false)]
-    [InlineData("     ", "Alex", false)]
-    [InlineData("12345", "", false)]
-    [InlineData("12345", "   ", false)]
-    [InlineData(" 12345 ", "Alex", true)]
-    public void Validation_matches_trimmed_input_rules(string reason, string actor, bool valid) =>
-        Assert.Equal(valid, new EscalateTicketRequestValidator().Validate(new EscalateTicketRequest(reason, actor)).IsValid);
+    [InlineData("tiny", false)]
+    [InlineData("     ", false)]
+    [InlineData(" 12345 ", true)]
+    public void Validation_matches_trimmed_input_rules(string reason, bool valid) =>
+        Assert.Equal(valid, new EscalateTicketRequestValidator().Validate(new EscalateTicketRequest(reason)).IsValid);
 
     [Fact]
     public void Validation_checks_maximum_lengths()
     {
         var validator = new EscalateTicketRequestValidator();
-        Assert.True(validator.Validate(new EscalateTicketRequest(new string('r', 500), new string('a', 100))).IsValid);
-        Assert.False(validator.Validate(new EscalateTicketRequest(new string('r', 501), "Alex")).IsValid);
-        Assert.False(validator.Validate(new EscalateTicketRequest("Reason", new string('a', 101))).IsValid);
+        Assert.True(validator.Validate(new EscalateTicketRequest(new string('r', 500))).IsValid);
+        Assert.False(validator.Validate(new EscalateTicketRequest(new string('r', 501))).IsValid);
     }
 
     [Fact]
@@ -66,7 +63,7 @@ public class EscalateTicketCommandHandlerTests
         var handler = new EscalateTicketCommandHandler(context.Tickets.Object, context.Customers.Object, context.Categories.Object,
             context.Candidates.Object, new TriagePolicy(new SlaSettings()), history.Object, context.UnitOfWork.Object,
             context.Clock, new GetTicketQueryHandler(context.TicketQueries.Object));
-        await Assert.ThrowsAsync<NotFoundException>(() => handler.HandleAsync(999, new("Valid reason", "Alex"), default));
+        await Assert.ThrowsAsync<NotFoundException>(() => handler.HandleAsync(999, new("Valid reason"), "Alex", default));
         history.Verify(h => h.Add(It.IsAny<TicketEscalation>()), Times.Never);
         context.VerifySaved(Times.Never());
     }

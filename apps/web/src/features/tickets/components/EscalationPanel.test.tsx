@@ -23,7 +23,6 @@ describe('EscalationPanel', () => {
     render(<EscalationPanel ticket={ticket} onUpdated={vi.fn()} />);
     await screen.findByText('No escalations yet.');
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'tiny' } });
-    fireEvent.change(screen.getByLabelText('Escalated by'), { target: { value: 'Alex' } });
     fireEvent.click(screen.getByRole('button', { name: 'Escalate ticket' }));
     expect(screen.getByLabelText('Reason')).toHaveAttribute('aria-invalid', 'true');
     expect(escalate).not.toHaveBeenCalled();
@@ -35,7 +34,6 @@ describe('EscalationPanel', () => {
     render(<EscalationPanel ticket={ticket} onUpdated={onUpdated} />);
     await screen.findByText('No escalations yet.');
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Urgent customer issue' } });
-    fireEvent.change(screen.getByLabelText('Escalated by'), { target: { value: 'Alex' } });
     fireEvent.click(screen.getByRole('button', { name: 'Escalate ticket' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('A Critical ticket cannot be escalated.');
     expect(onUpdated).not.toHaveBeenCalled();
@@ -60,12 +58,11 @@ describe('EscalationPanel', () => {
     await screen.findByText('No escalations yet.');
     getHistory.mockResolvedValue([result.escalation]);
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: '  Urgent customer issue  ' } });
-    fireEvent.change(screen.getByLabelText('Escalated by'), { target: { value: ' Alex ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Escalate ticket' }));
     expect(screen.getByRole('button', { name: 'Escalating...' })).toBeDisabled();
     await act(async () => complete(result));
     await waitFor(() => expect(onUpdated).toHaveBeenCalledWith(result.ticket));
-    expect(escalate).toHaveBeenCalledWith(ticket.id, { reason: 'Urgent customer issue', escalatedBy: 'Alex' });
+    expect(escalate).toHaveBeenCalledWith(ticket.id, { reason: 'Urgent customer issue' });
     expect(getHistory).toHaveBeenCalledTimes(2);
     expect(screen.getByText('High → Critical')).toBeInTheDocument();
     expect(screen.getByText('Urgent customer issue')).toBeInTheDocument();

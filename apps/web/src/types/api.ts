@@ -153,6 +153,25 @@ export interface ProblemDetails {
   errors?: Record<string, string[]>;
 }
 
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface CurrentUser {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expiresAtUtc: string;
+  agent: CurrentUser;
+}
+
+export type AuthSession = LoginResponse;
+
 export interface TriageResult {
   priorityReason: string;
   slaReason: string;
@@ -174,7 +193,6 @@ export interface Escalation {
 
 export interface EscalationPayload {
   reason: string;
-  escalatedBy: string;
 }
 
 export interface EscalationResult {

@@ -32,6 +32,9 @@ public static class DependencyInjection
         services.AddSingleton<IClock, SystemClock>();
         services.AddScoped<ITriageQueries, TriageQueries>();
         services.AddScoped<IEscalationStore, EscalationStore>();
+        services.AddScoped<IAgentPasswordService, AgentPasswordService>();
+        services.AddScoped<IAgentAuthenticationService, AgentAuthenticationService>();
+        services.AddScoped<IJwtTokenService, JwtTokenService>();
 
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();

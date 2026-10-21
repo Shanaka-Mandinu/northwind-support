@@ -14,8 +14,6 @@ public sealed class EscalateTicketRequestValidator : AbstractValidator<EscalateT
     {
         RuleFor(x => x.Reason).Must(x => x is not null && x.Trim().Length is >= 5 and <= 500)
             .WithMessage("Reason must be 5–500 characters after trimming.");
-        RuleFor(x => x.EscalatedBy).Must(x => x is not null && x.Trim().Length is >= 1 and <= 100)
-            .WithMessage("Escalated by must be 1–100 characters after trimming.");
     }
 }
 
@@ -23,7 +21,7 @@ public sealed class EscalateTicketCommandHandler(ITicketRepository tickets, ICus
     ICategoryRepository categories, ITriageQueries candidates, TriagePolicy policy, IEscalationStore history,
     IUnitOfWork unitOfWork, IClock clock, GetTicketQueryHandler getTicket)
 {
-    public async Task<EscalationResultDto> HandleAsync(int id, EscalateTicketRequest request, CancellationToken ct)
+    public async Task<EscalationResultDto> HandleAsync(int id, EscalateTicketRequest request, string authenticatedActor, CancellationToken ct)
     {
         var ticket = await tickets.GetByIdAsync(id, ct) ?? throw new NotFoundException("Ticket", id);
         var priority = ticket.EscalationPriority();
@@ -32,7 +30,7 @@ public sealed class EscalateTicketCommandHandler(ITicketRepository tickets, ICus
         var now = clock.UtcNow;
         var owner = policy.Assign(await candidates.GetCandidatesAsync(ticket.CategoryId, ct), category.RequiresSpecialist, ticket.AssignedAgentId);
         var escalation = ticket.Escalate(now.Add(policy.WindowFor(priority, customer.Tier)), owner.AgentId,
-            request.Reason, request.EscalatedBy, now);
+            request.Reason, authenticatedActor, now);
         history.Add(escalation);
         // Ticket and history use the same DbContext and commit atomically.
         await unitOfWork.SaveChangesAsync(ct);

@@ -1,4 +1,5 @@
-import type { ProblemDetails } from '../types/api';
+﻿import type { ProblemDetails } from '../types/api';
+import { clearSession, getStoredSession } from '../features/auth/session';
 
 /**
  * Where the API lives. In development this stays '/api' and the Vite dev server proxies it
@@ -30,15 +31,28 @@ export class ApiError extends Error {
  * {@link ApiError} that callers can show to the user.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const session = getStoredSession();
+  const headers = new Headers(init?.headers ?? {});
+
+  if (!headers.has('Content-Type') && !(init?.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  if (session?.token && !path.startsWith('/auth/login')) {
+    headers.set('Authorization', `Bearer ${session.token}`);
+  }
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      // An old failed request must not clear a newer login's session.
+      const current = getStoredSession();
+      if (!current || current.token === session?.token) clearSession();
+    }
     const problem = await readProblem(response);
 
     throw new ApiError(

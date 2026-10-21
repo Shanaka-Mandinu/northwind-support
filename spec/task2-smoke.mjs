@@ -3,9 +3,17 @@
 import assert from 'node:assert/strict';
 
 const base = process.env.TASK2_API_URL ?? 'http://localhost:5044/api';
+const loginResponse = await fetch(base + '/auth/login', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'alex.turner@northwind-support.example', password: 'NorthwindDev!2026' }),
+});
+assert.equal(loginResponse.status, 200);
+const session = await loginResponse.json();
 async function call(path, expected = 200, body, method = 'POST') {
-  const response = await fetch(base + path, body === undefined ? undefined : {
-    method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  const response = await fetch(base + path, {
+    method: body === undefined ? 'GET' : method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token}` },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json();
   assert.equal(response.status, expected, `${path}: ${JSON.stringify(data)}`);
@@ -19,15 +27,13 @@ assert.equal(created.slaStatus, 'WithinSla');
 assert.ok(Math.abs(Date.parse(created.dueAtUtc) - Date.parse(created.createdAtUtc) - 12 * 3600000) <= 1);
 assert.ok(created.triage.priorityReason && created.triage.slaReason && created.triage.assignmentReason);
 await call(`/tickets/${created.id}/escalate`, 400, { reason: 'tiny', escalatedBy: 'Alex' });
-await call(`/tickets/${created.id}/escalate`, 400, { reason: 'Valid reason', escalatedBy: '' });
-await call(`/tickets/${created.id}/escalate`, 400, { reason: 'Valid reason' });
 await call('/tickets/999999/escalate', 404, { reason: 'Valid reason', escalatedBy: 'Alex' });
 const first = await call(`/tickets/${created.id}/escalate`, 200, { reason: '  Customer impact increased  ', escalatedBy: ' Alex ' });
 assert.equal(first.ticket.priority, 'High');
 assert.equal(first.ticket.assignedAgent.id, created.assignedAgent.id);
 assert.equal(first.escalation.fromPriority, 'Medium');
 assert.equal(first.escalation.reason, 'Customer impact increased');
-assert.equal(first.escalation.escalatedBy, 'Alex');
+assert.equal(first.escalation.escalatedBy, `${session.agent.fullName} (agent ${session.agent.id})`);
 assert.ok(Math.abs(Date.parse(first.ticket.dueAtUtc) - Date.parse(first.escalation.escalatedAtUtc) - 4 * 3600000) <= 1);
 const second = await call(`/tickets/${created.id}/escalate`, 200, { reason: 'Further impact confirmed', escalatedBy: 'Ben' });
 assert.equal(second.ticket.priority, 'Critical');
