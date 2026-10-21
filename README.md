@@ -67,6 +67,67 @@ credentials.**
 
 ## Tests
 
+### Task 1: DEFECT-117
+
+The list effect watched only search, page and page size, so a status or other filter change
+on page 1 did not fetch. A later search change ran the effect with the previously selected
+filters, making them appear to work intermittently.
+
+The hook now fetches whenever its effective query changes. Only search updates wait 300 ms;
+all other filters, sorting and paging apply immediately through the same generic path, which
+also supports a future SLA filter. While search is pending, dropdowns use the last settled
+search; when typing settles, the latest search is combined with the current filters on page 1.
+Reset cancels pending search. A request sequence prevents older responses or errors from
+replacing newer results and invalidates responses on unmount.
+
+Verification: the request-level tests in `useTicketList.test.ts` capture `fetch` URLs, including
+status-only changes, rapid typing, paging, clearing/resetting search and out-of-order responses.
+On the original hook 14 of the 15 tests failed; all pass with the fix. Run
+`npm run test --workspace apps/web`, `npm run typecheck` and `npm run lint`.
+For a manual check, open browser Network on `/tickets`: changing Status sends a request
+immediately; typing sends one request after settling.
+
+### Task 1: database filtering
+
+`TicketQueries.ApplyFilters` composes `IQueryable.Where` predicates before `CountAsync`,
+sorting and paging. Status, priority, category, customer and agent match exactly; unassigned
+means a null agent. Search is a trimmed literal substring of title, reference or customer name;
+blank search is ignored. All supplied filters combine with AND, so an agent plus
+`unassignedOnly=true` returns no tickets. Search case sensitivity follows the database collation.
+Reads remain untracked with narrow projections. No schema changes or new indexes were needed;
+existing filter indexes remain in use as available to the query planner. Substring search can
+scan at scale; full-text search is a future decision, not part of this task.
+
+To add `slaStatus` in Task 2, extend the query contract and append a SQL-translatable predicate
+in `ApplyFilters`; the shared count/sort/page pipeline stays unchanged. Do not call the current
+C# SLA evaluator inside a WHERE clause. The frontend needs a typed field, API parameter and
+control, but no special fetching-effect wiring.
+
+`TicketQueriesTests` runs 16 cases against in-memory SQLite by default, including exact matches,
+combinations, customer/title/reference search, literal wildcard characters, null assignment,
+empty results and paging. The same 16 cases also passed against SQL Server. A command interceptor
+verified that both executed queries contain WHERE, and the page query applies it before ORDER BY
+and OFFSET/FETCH; the count has no paging. Detailed test output prints those SQL statements.
+HTTP checks against the updated API and existing demo data also returned 14 High tickets
+(7 pages at size 2), 4 High/InProgress tickets, 7 Contoso tickets and 4 unassigned tickets.
+To repeat against local SQL Server in PowerShell:
+
+```powershell
+$settings = Get-Content apps/api/src/SupportDesk.Presentation/appsettings.Development.json -Raw | ConvertFrom-Json
+$env:SUPPORTDESK_TEST_SQLSERVER = $settings.ConnectionStrings.Default
+dotnet test apps/api/tests/SupportDesk.UnitTests --filter FullyQualifiedName~TicketQueriesTests --logger 'console;verbosity=detailed'
+Remove-Item Env:SUPPORTDESK_TEST_SQLSERVER
+```
+
+This optional SQL Server run creates and deletes uniquely named test databases; it never uses
+the application's database for test data. The login needs database-creation permissions.
+The complete suite passed as 42 backend unit/query tests, 4 architecture tests and 16 frontend
+tests. An already running API locked Debug DLLs on Windows, so the full backend suite was
+verified with `dotnet test --configuration Release --no-restore`. Stop the API before `npm test`
+if that happens. Existing NuGet vulnerability warnings for `System.Security.Cryptography.Pkcs`
+9.0.11 remain; upgrading dependencies is outside this Task 1 change. Browser automation was not
+available; frontend regression tests inspect actual request URLs through a mocked fetch boundary.
+
 ```bash
 npm test                      # dotnet test, then the web tests (Vitest)
 ```
@@ -87,7 +148,7 @@ Both pass on a clean checkout and neither needs a database.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
+| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters run in SQL before counting and paging. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
