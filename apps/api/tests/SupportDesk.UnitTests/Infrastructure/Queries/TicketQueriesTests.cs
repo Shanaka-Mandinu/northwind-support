@@ -71,7 +71,7 @@ public sealed class TicketQueriesTests(ITestOutputHelper output) : IAsyncLifetim
         await _db.SaveChangesAsync();
         _db.ChangeTracker.Clear();
         _sql.Commands.Clear();
-        _queries = new TicketQueries(_db, new FixedClock());
+        _queries = new TicketQueries(_db, new FixedClock(), new SlaSettings());
     }
 
     private void AddTicket(string reference, string title, int customerId, int categoryId,
@@ -224,6 +224,106 @@ public sealed class TicketQueriesTests(ITestOutputHelper output) : IAsyncLifetim
         {
             await _sqlite.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task Sla_states_filter_count_sort_and_project_in_sql_at_exact_boundaries()
+    {
+        var now = FixedClock.DefaultNow;
+        var samples = new[]
+        {
+            ("SLA-WITHIN", now.AddHours(1).AddMilliseconds(1), (DateTime?)null),
+            ("SLA-RISK", now.AddHours(1), (DateTime?)null),
+            ("SLA-DUE", now, (DateTime?)null),
+            ("SLA-BREACH", now.AddMilliseconds(-1), (DateTime?)null),
+            ("SLA-MET", now, (DateTime?)now),
+            ("SLA-LATE", now, (DateTime?)now.AddMilliseconds(1))
+        };
+        foreach (var (reference, due, resolved) in samples)
+        {
+            var ticket = Ticket.Raise(reference, "SLA test", "Description", _contosoId, _billingId,
+                TicketPriority.Medium, now.AddHours(-3));
+            ticket.ApplyTriage(due, null);
+            if (resolved is not null) ticket.ChangeStatus(TicketStatus.Resolved, resolved.Value);
+            _db.Add(ticket);
+        }
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        var all = await _db.Set<Ticket>().AsNoTracking().ToListAsync();
+        foreach (var state in Enum.GetValues<SlaStatus>())
+        {
+            var expected = all.Where(t => SlaEvaluator.Evaluate(t.DueAtUtc, t.ResolvedAtUtc, now,
+                t.SlaStartedAtUtc ?? t.CreatedAtUtc) == state).Select(t => t.Id).ToList();
+            _sql.Commands.Clear();
+            var result = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = state, PageSize = 1, SortBy = "slaStatus" }, default);
+            Assert.Equal(expected.Count, result.TotalCount);
+            Assert.Equal(expected.Count, result.TotalPages);
+            Assert.All(result.Items, item => { Assert.Equal(state, item.SlaStatus); Assert.Contains(item.Id, expected); });
+            Assert.Contains("CASE", _sql.Commands[0]);
+            Assert.Contains("WHERE", _sql.Commands[0]);
+            Assert.Contains("CASE", _sql.Commands[1]);
+        }
+        var detail = await _queries.GetDetailAsync(all.Single(t => t.Reference == "SLA-RISK").Id, default);
+        Assert.Equal(SlaStatus.AtRisk, detail!.SlaStatus);
+        var customer = await _queries.GetForCustomerAsync(_contosoId, default);
+        Assert.Equal(SlaStatus.AtRisk, customer.Single(t => t.Reference == "SLA-RISK").SlaStatus);
+        var combined = await _queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.AtRisk, Search = "SLA-RISK" }, default);
+        Assert.Equal(1, combined.TotalCount);
+    }
+
+    [Fact]
+    public async Task Escalation_history_is_persisted_newest_first_and_cannot_be_changed()
+    {
+        var ticket = await _db.Set<Ticket>().SingleAsync(t => t.Reference == "TCK-0002");
+        var store = new SupportDesk.Infrastructure.Repositories.EscalationStore(_db);
+        var now = FixedClock.DefaultNow;
+        var first = ticket.Escalate(now.AddHours(12), _agentId, "First escalation", "Alex", now);
+        store.Add(first);
+        await _db.SaveChangesAsync();
+        var second = ticket.Escalate(now.AddHours(5), null, "Second escalation", "Sara", now.AddHours(1));
+        store.Add(second);
+        await _db.SaveChangesAsync();
+        var history = await store.GetHistoryAsync(ticket.Id, default);
+        Assert.Equal(new[] { second.Id, first.Id }, history.Select(e => e.Id));
+        Assert.Equal(_agentId, history[0].FromAgent!.Id);
+        Assert.Null(history[0].ToAgent);
+        Assert.Equal(TicketPriority.Low, history[1].FromPriority);
+        _db.Entry(first).Property(e => e.Reason).CurrentValue = "Tampered history";
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _db.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task Assignment_query_counts_only_open_work_and_specializations()
+    {
+        var agent = await _db.Set<Agent>().SingleAsync(a => a.Id == _agentId);
+        agent.AddSpecialization(_billingId);
+        await _db.SaveChangesAsync();
+        var candidates = await new TriageQueries(_db).GetCandidatesAsync(_billingId, default);
+        var candidate = Assert.Single(candidates);
+        Assert.Equal(1, candidate.OpenTickets); // The other assigned ticket is resolved.
+        Assert.True(candidate.IsSpecialist);
+        Assert.True(candidate.IsActive);
+    }
+
+    [Theory]
+    [InlineData(25, SlaStatus.WithinSla)]
+    [InlineData(75, SlaStatus.AtRisk)]
+    public async Task Escalated_sla_uses_new_window_and_configured_threshold(double threshold, SlaStatus expected)
+    {
+        var now = FixedClock.DefaultNow;
+        var ticket = Ticket.Raise("NEW-WINDOW", "Window test", "Description", _contosoId, _billingId,
+            TicketPriority.Low, now.AddDays(-4));
+        ticket.ApplyTriage(now.AddDays(-1), null);
+        _db.Add(ticket);
+        await _db.SaveChangesAsync();
+        var entry = ticket.Escalate(now.AddHours(3), null, "Start a new window", "Alex", now.AddHours(-1));
+        _db.Add(entry);
+        await _db.SaveChangesAsync();
+        var queries = new TicketQueries(_db, new FixedClock(), new SlaSettings { AtRiskThresholdPercent = threshold });
+        var detail = await queries.GetDetailAsync(ticket.Id, default);
+        Assert.Equal(expected, detail!.SlaStatus);
+        var list = await queries.GetPagedAsync(new TicketQuery { Search = "NEW-WINDOW", SlaStatus = expected }, default);
+        Assert.Equal(ticket.Id, Assert.Single(list.Items).Id);
     }
 
     private sealed class SqlCapture : DbCommandInterceptor

@@ -21,11 +21,11 @@ internal sealed class TicketCommandTestContext
 {
     public TicketCommandTestContext()
     {
-        Customers.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        Customers.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Customer("Contoso", "test@example.test", null, CustomerTier.Premium, Clock.UtcNow));
 
-        Categories.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        Categories.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SupportDesk.Domain.Aggregates.Categories.Category("General", false, false));
 
         Tickets.Setup(t => t.NextReferenceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync("TCK-0041");
@@ -44,18 +44,23 @@ internal sealed class TicketCommandTestContext
                 Category = new CategoryDto(1, "General", false)
             });
 
+        Candidates.Setup(x => x.GetCandidatesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<AssignmentCandidate>());
+
         var getTicket = new GetTicketQueryHandler(TicketQueries.Object);
 
         RaiseTicket = new RaiseTicketCommandHandler(
-            Tickets.Object, Customers.Object, Categories.Object, UnitOfWork.Object, Clock, getTicket,
+            Tickets.Object, Customers.Object, Categories.Object, UnitOfWork.Object, Candidates.Object, new TriagePolicy(new SlaSettings()), Clock, getTicket,
             NullLogger<RaiseTicketCommandHandler>.Instance);
 
         ChangeTicketStatus = new ChangeTicketStatusCommandHandler(Tickets.Object, UnitOfWork.Object, Clock, getTicket);
 
         AssignTicket = new AssignTicketCommandHandler(
-            Tickets.Object, Agents.Object, UnitOfWork.Object, Clock, getTicket,
+            Tickets.Object, Agents.Object, Categories.Object, Candidates.Object, new TriagePolicy(new SlaSettings()), UnitOfWork.Object, Clock, getTicket,
             NullLogger<AssignTicketCommandHandler>.Instance);
     }
+
+    public Mock<ITriageQueries> Candidates { get; } = new();
 
     public Mock<ITicketRepository> Tickets { get; } = new();
 
@@ -99,6 +104,8 @@ internal sealed class TicketCommandTestContext
         }
 
         Agents.Setup(a => a.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(agent);
+        Candidates.Setup(q => q.GetCandidatesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { new AssignmentCandidate(id, fullName, isActive, 0, 10, true) });
     }
 
     public void VerifySaved(Times times) =>

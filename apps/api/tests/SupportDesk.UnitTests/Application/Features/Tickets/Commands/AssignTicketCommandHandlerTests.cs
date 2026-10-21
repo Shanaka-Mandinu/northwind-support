@@ -6,6 +6,23 @@ namespace SupportDesk.UnitTests.Application.Features.Tickets.Commands;
 
 public class AssignTicketCommandHandlerTests
 {
+    [Theory]
+    [InlineData(10, true)]
+    [InlineData(0, false)]
+    public async Task Manual_assignment_rejects_capacity_and_specialization_violations(int open, bool specialist)
+    {
+        var context = new TicketCommandTestContext();
+        var ticket = context.ExistingTicket(new TicketBuilder().Build());
+        context.ExistingAgent(4);
+        context.Categories.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SupportDesk.Domain.Aggregates.Categories.Category("Specialist category", true, false));
+        context.Candidates.Setup(c => c.GetCandidatesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { new SupportDesk.Domain.Aggregates.Tickets.AssignmentCandidate(4, "Alex", true, open, 10, specialist) });
+        await Assert.ThrowsAsync<ConflictException>(() => context.AssignTicket.HandleAsync(ticket.Id, new(4), default));
+        Assert.Null(ticket.AssignedAgentId);
+        context.VerifySaved(Times.Never());
+    }
+
     [Fact]
     public async Task HandleAsync_GivesTheTicketToAnActiveAgent()
     {
