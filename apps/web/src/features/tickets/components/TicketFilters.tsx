@@ -5,10 +5,16 @@ import type {
   TicketFilters as Filters,
   TicketPriority,
   TicketStatus,
+  SlaStatus,
 } from '../../../types/api';
 import { humanize } from '../../../lib/format';
 
 const statuses: TicketStatus[] = ['New', 'Open', 'InProgress', 'Resolved', 'Closed'];
+const slaStates: { value: SlaStatus; label: string }[] = [
+  { value: 'WithinSla', label: 'Within SLA' }, { value: 'AtRisk', label: 'At risk' },
+  { value: 'Breached', label: 'Breached' }, { value: 'Met', label: 'Met' },
+  { value: 'NotApplicable', label: 'No SLA' },
+];
 const priorities: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
 
 interface TicketFiltersProps {
@@ -34,6 +40,14 @@ export function TicketFilters({
   return (
     <section className="filters" aria-label="Ticket filters">
       <div className="filters__row">
+        <div className="field">
+          <label className="field__label" htmlFor="filter-sla">SLA status</label>
+          <select id="filter-sla" value={filters.slaStatus ?? ''}
+            onChange={(event) => onChange({ slaStatus: (event.target.value || undefined) as SlaStatus | undefined })}>
+            <option value="">All SLA states</option>
+            {slaStates.map((state) => <option key={state.value} value={state.value}>{state.label}</option>)}
+          </select>
+        </div>
         <div className="field">
           <label className="field__label" htmlFor="filter-search">
             Search
@@ -161,6 +175,7 @@ export function TicketFilters({
             <option value="createdAtUtc:desc">Newest first</option>
             <option value="createdAtUtc:asc">Oldest first</option>
             <option value="dueAtUtc:asc">Due soonest</option>
+            <option value="slaStatus:asc">SLA status</option>
             <option value="priority:desc">Highest priority</option>
             <option value="updatedAtUtc:desc">Recently updated</option>
           </select>

@@ -11,6 +11,32 @@ public class RaiseTicketCommandHandlerTests
         new("Cannot log in to the portal", "Happens for every user since this morning.", 1, 3, priority);
 
     [Fact]
+    public async Task Forced_priority_and_selected_owner_are_applied_before_saving()
+    {
+        var context = new TicketCommandTestContext();
+        context.Categories.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SupportDesk.Domain.Aggregates.Categories.Category("Custom forced category", true, true));
+        context.Candidates.Setup(q => q.GetCandidatesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { new AssignmentCandidate(2, "Ben", true, 1, 8, true) });
+        var result = await context.RaiseTicket.HandleAsync(Request(TicketPriority.Low), default);
+        Assert.Equal(TicketPriority.Critical, context.AddedTicket!.Priority);
+        Assert.Equal(2, context.AddedTicket.AssignedAgentId);
+        Assert.Equal(context.Clock.UtcNow.AddHours(2), context.AddedTicket.DueAtUtc);
+        Assert.Contains("forces Critical", result.Triage!.PriorityReason);
+    }
+
+    [Fact]
+    public async Task No_eligible_agent_still_creates_with_due_date_and_explanation()
+    {
+        var context = new TicketCommandTestContext();
+        var result = await context.RaiseTicket.HandleAsync(Request(), default);
+        Assert.Null(context.AddedTicket!.AssignedAgentId);
+        Assert.Equal(context.Clock.UtcNow.AddHours(12), context.AddedTicket.DueAtUtc);
+        Assert.Contains("Unassigned because", result.Triage!.AssignmentReason);
+        context.VerifySaved(Times.Once());
+    }
+
+    [Fact]
     public async Task HandleAsync_StampsReferenceStatusAndTimestamps()
     {
         var context = new TicketCommandTestContext();
@@ -43,8 +69,8 @@ public class RaiseTicketCommandHandlerTests
     {
         var context = new TicketCommandTestContext();
         context.Customers
-            .Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+            .Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SupportDesk.Domain.Aggregates.Customers.Customer?)null);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(
             () => context.RaiseTicket.HandleAsync(Request(), CancellationToken.None));

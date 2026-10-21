@@ -43,6 +43,46 @@ public sealed class Ticket : AggregateRoot
     /// <summary>When the team has committed to responding by. Null when no SLA applies.</summary>
     public DateTime? DueAtUtc { get; private set; }
 
+    public DateTime? SlaStartedAtUtc { get; private set; }
+
+    public void ApplyTriage(DateTime dueAtUtc, int? agentId)
+    {
+        DueAtUtc = dueAtUtc;
+        SlaStartedAtUtc = CreatedAtUtc;
+        AssignedAgentId = agentId;
+    }
+
+    public TicketPriority EscalationPriority()
+    {
+        if (Status is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            throw new BusinessRuleViolationException($"A {Status} ticket cannot be escalated.");
+        }
+        if (Priority == TicketPriority.Critical)
+        {
+            throw new BusinessRuleViolationException("A Critical ticket cannot be escalated.");
+        }
+        return Priority + 1;
+    }
+
+    public TicketEscalation Escalate(DateTime dueAtUtc, int? agentId, string reason, string actor, DateTime now)
+    {
+        var priority = EscalationPriority();
+        reason = reason.Trim();
+        actor = actor.Trim();
+        if (reason.Length is < 5 or > 500 || actor.Length is < 1 or > 100)
+        {
+            throw new ArgumentException("Reason must be 5–500 characters and actor 1–100 characters.");
+        }
+        var history = new TicketEscalation(this, priority, agentId, dueAtUtc, reason, actor, now);
+        Priority = priority;
+        DueAtUtc = dueAtUtc;
+        SlaStartedAtUtc = now;
+        AssignedAgentId = agentId;
+        UpdatedAtUtc = now;
+        return history;
+    }
+
     public DateTime? ResolvedAtUtc { get; private set; }
 
     /// <summary>True while the ticket still needs work from an agent.</summary>

@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
@@ -10,10 +12,32 @@ using SupportDesk.Application.Features.Tickets.Queries.SearchTickets;
 namespace SupportDesk.Presentation.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/tickets")]
 [Produces("application/json")]
 public sealed class TicketsController : ControllerBase
 {
+    [HttpPost("{id:int}/escalate")]
+    public async Task<ActionResult<EscalationResultDto>> Escalate(int id, EscalateTicketRequest request,
+        [FromServices] SupportDesk.Application.Features.Tickets.Commands.EscalateTicket.EscalateTicketCommandHandler handler,
+        CancellationToken ct)
+    {
+        if (!int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var agentId) || agentId <= 0)
+            return Unauthorized();
+        var name = User.FindFirstValue(ClaimTypes.Name) ?? "Agent";
+        // Include a stable ID and fit the existing 100-character history column.
+        var actor = $"{name[..Math.Min(name.Length, 70)]} (agent {agentId})";
+        return Ok(await handler.HandleAsync(id, request, actor, ct));
+    }
+
+    [HttpGet("{id:int}/escalations")]
+    public async Task<IReadOnlyList<EscalationDto>> History(int id,
+        [FromServices] GetTicketQueryHandler getTicket,
+        [FromServices] SupportDesk.Application.Abstractions.IEscalationStore history, CancellationToken ct)
+    {
+        await getTicket.HandleAsync(id, ct);
+        return await history.GetHistoryAsync(id, ct);
+    }
     /// <summary>Searches tickets with filters, sorting and paging.</summary>
     [HttpGet]
     public Task<PagedResult<TicketListItemDto>> Search(

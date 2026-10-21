@@ -4,6 +4,7 @@ using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Exceptions;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Domain.Repositories;
+using SupportDesk.Domain.Aggregates.Tickets;
 
 namespace SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 
@@ -11,12 +12,14 @@ namespace SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 /// Hands a ticket to an agent, or takes it back off them when no agent is given.
 /// </summary>
 /// <remarks>
-/// This is the manual override the team lead uses, so it deliberately does not check the
-/// category's specialist rule.
+/// Manual selection shares the eligibility rules used by automatic triage and escalation.
 /// </remarks>
 public sealed class AssignTicketCommandHandler(
     ITicketRepository tickets,
     IAgentRepository agents,
+    ICategoryRepository categories,
+    ITriageQueries candidates,
+    TriagePolicy policy,
     IUnitOfWork unitOfWork,
     IClock clock,
     GetTicketQueryHandler getTicket,
@@ -36,6 +39,14 @@ public sealed class AssignTicketCommandHandler(
             {
                 throw new ConflictException(
                     $"Agent {agent.FullName} is not active and cannot take new tickets.");
+            }
+
+            var category = await categories.GetByIdAsync(ticket.CategoryId, ct)
+                ?? throw new NotFoundException("Category", ticket.CategoryId);
+            var candidate = (await candidates.GetCandidatesAsync(ticket.CategoryId, ct)).SingleOrDefault(a => a.Id == agentId);
+            if (candidate is null || !policy.IsEligible(candidate, category.RequiresSpecialist))
+            {
+                throw new ConflictException($"Agent {agent.FullName} must have spare capacity and the required specialization.");
             }
         }
 

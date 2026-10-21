@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { RequireAuth } from './features/auth/RequireAuth';
 import { App } from './App';
+import { LoginPage } from './features/auth/LoginPage';
 import { NotFoundPage } from './features/NotFoundPage';
 import { CustomerDetailPage } from './features/customers/CustomerDetailPage';
 import { CustomerListPage } from './features/customers/CustomerListPage';
@@ -10,7 +12,11 @@ import { TicketListPage } from './features/tickets/TicketListPage';
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <App />,
+    element: (
+      <RequireAuth>
+        <App />
+      </RequireAuth>
+    ),
     children: [
       { index: true, element: <Navigate to="/tickets" replace /> },
       { path: 'tickets', element: <TicketListPage /> },
@@ -21,4 +27,5 @@ export const router = createBrowserRouter([
       { path: '*', element: <NotFoundPage /> },
     ],
   },
+  { path: '/login', element: <LoginPage /> },
 ]);

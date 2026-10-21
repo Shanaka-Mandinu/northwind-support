@@ -11,7 +11,7 @@ export type TicketStatus = 'New' | 'Open' | 'InProgress' | 'Resolved' | 'Closed'
 
 export type SlaStatus = 'NotApplicable' | 'WithinSla' | 'AtRisk' | 'Breached' | 'Met';
 
-export type TicketSortField = 'createdAtUtc' | 'updatedAtUtc' | 'dueAtUtc' | 'priority' | 'status';
+export type TicketSortField = 'createdAtUtc' | 'updatedAtUtc' | 'dueAtUtc' | 'priority' | 'status' | 'slaStatus';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -65,6 +65,7 @@ export interface TicketListItem {
 }
 
 export interface TicketDetail {
+  triage?: TriageResult | null;
   id: number;
   reference: string;
   title: string;
@@ -86,6 +87,7 @@ export interface TicketFilters {
   search: string;
   status?: TicketStatus;
   priority?: TicketPriority;
+  slaStatus?: SlaStatus;
   categoryId?: number;
   customerId?: number;
   assignedAgentId?: number;
@@ -149,4 +151,51 @@ export interface ProblemDetails {
   detail?: string;
   traceId?: string;
   errors?: Record<string, string[]>;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface CurrentUser {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expiresAtUtc: string;
+  agent: CurrentUser;
+}
+
+export type AuthSession = LoginResponse;
+
+export interface TriageResult {
+  priorityReason: string;
+  slaReason: string;
+  assignmentReason: string;
+}
+
+export interface Escalation {
+  id: number;
+  fromPriority: TicketPriority;
+  toPriority: TicketPriority;
+  fromAgent: AgentSummary | null;
+  toAgent: AgentSummary | null;
+  fromDueAtUtc: string | null;
+  toDueAtUtc: string;
+  reason: string;
+  escalatedBy: string;
+  escalatedAtUtc: string;
+}
+
+export interface EscalationPayload {
+  reason: string;
+}
+
+export interface EscalationResult {
+  ticket: TicketDetail;
+  escalation: Escalation;
 }

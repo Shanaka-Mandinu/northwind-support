@@ -38,6 +38,7 @@ public sealed class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.Property(t => t.UpdatedAtUtc).HasColumnType("datetime2(3)");
 
         builder.Property(t => t.DueAtUtc).HasColumnType("datetime2(3)");
+        builder.Property(t => t.SlaStartedAtUtc).HasColumnType("datetime2(3)");
 
         builder.Property(t => t.ResolvedAtUtc).HasColumnType("datetime2(3)");
 

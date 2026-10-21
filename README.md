@@ -67,11 +67,239 @@ credentials.**
 
 ## Tests
 
+### Task 1: DEFECT-117
+
+The list effect watched only search, page and page size, so a status or other filter change
+on page 1 did not fetch. A later search change ran the effect with the previously selected
+filters, making them appear to work intermittently.
+
+The hook now fetches whenever its effective query changes. Only search updates wait 300 ms;
+all other filters, sorting and paging apply immediately through the same generic path, which
+also supports a future SLA filter. While search is pending, dropdowns use the last settled
+search; when typing settles, the latest search is combined with the current filters on page 1.
+Reset cancels pending search. A request sequence prevents older responses or errors from
+replacing newer results and invalidates responses on unmount.
+
+Verification: the request-level tests in `useTicketList.test.ts` capture `fetch` URLs, including
+status-only changes, rapid typing, paging, clearing/resetting search and out-of-order responses.
+On the original hook 14 of the 15 tests failed; all pass with the fix. Run
+`npm run test --workspace apps/web`, `npm run typecheck` and `npm run lint`.
+For a manual check, open browser Network on `/tickets`: changing Status sends a request
+immediately; typing sends one request after settling.
+
+### Task 1: database filtering
+
+`TicketQueries.ApplyFilters` composes `IQueryable.Where` predicates before `CountAsync`,
+sorting and paging. Status, priority, category, customer and agent match exactly; unassigned
+means a null agent. Search is a trimmed literal substring of title, reference or customer name;
+blank search is ignored. All supplied filters combine with AND, so an agent plus
+`unassignedOnly=true` returns no tickets. Search case sensitivity follows the database collation.
+Reads remain untracked with narrow projections. No schema changes or new indexes were needed;
+existing filter indexes remain in use as available to the query planner. Substring search can
+scan at scale; full-text search is a future decision, not part of this task.
+
+Task 2 adds `slaStatus` through a SQL-translatable projection and a predicate in `ApplyFilters`;
+the count/sort/page pipeline is unchanged. The frontend adds its typed field, API parameter and
+control without special fetching-effect wiring.
+
+`TicketQueriesTests` runs 16 cases against in-memory SQLite by default, including exact matches,
+combinations, customer/title/reference search, literal wildcard characters, null assignment,
+empty results and paging. The same 16 cases also passed against SQL Server. A command interceptor
+verified that both executed queries contain WHERE, and the page query applies it before ORDER BY
+and OFFSET/FETCH; the count has no paging. Detailed test output prints those SQL statements.
+HTTP checks against the updated API and existing demo data also returned 14 High tickets
+(7 pages at size 2), 4 High/InProgress tickets, 7 Contoso tickets and 4 unassigned tickets.
+To repeat against local SQL Server in PowerShell:
+
+```powershell
+$settings = Get-Content apps/api/src/SupportDesk.Presentation/appsettings.Development.json -Raw | ConvertFrom-Json
+$env:SUPPORTDESK_TEST_SQLSERVER = $settings.ConnectionStrings.Default
+dotnet test apps/api/tests/SupportDesk.UnitTests --filter FullyQualifiedName~TicketQueriesTests --logger 'console;verbosity=detailed'
+Remove-Item Env:SUPPORTDESK_TEST_SQLSERVER
+```
+
+This optional SQL Server run creates and deletes uniquely named test databases; it never uses
+the application's database for test data. The login needs database-creation permissions.
+The complete suite passed as 42 backend unit/query tests, 4 architecture tests and 16 frontend
+tests. An already running API locked Debug DLLs on Windows, so the full backend suite was
+verified with `dotnet test --configuration Release --no-restore`. Stop the API before `npm test`
+if that happens. Existing NuGet vulnerability warnings for `System.Security.Cryptography.Pkcs`
+9.0.11 remain; upgrading dependencies is outside this Task 1 change. Browser automation was not
+available; frontend regression tests inspect actual request URLs through a mocked fetch boundary.
+
 ```bash
 npm test                      # dotnet test, then the web tests (Vitest)
 ```
 
 Both pass on a clean checkout and neither needs a database.
+
+### Task 2: Ticket escalation & assignment
+
+Task 2 implements the shared triage rules that drive both ticket creation and escalation.
+The core design is a single `TriagePolicy` + `SlaSettings` model used everywhere: priority,
+SLA windows, specialist checks, and assignment selection all resolve through the same logic.
+That keeps automatic triage, manual assignment, and escalation consistent instead of duplicating
+business rules in separate handlers.
+
+Key implementation details:
+
+- `POST /api/tickets` now applies priority, due-date calculation, and agent assignment as part of
+  the creation flow. Categories with `ForcesCriticalPriority` always become `Critical`, and a
+  category requiring a specialist can only be assigned to an eligible specialist.
+- Assignment uses a deterministic selection rule: among active agents with capacity and required
+  specialization, choose the fewest open tickets; ties select the lowest agent ID.
+- If no eligible agent exists, the ticket is still created with HTTP 201 and an explanatory
+  triage reason instead of failing the request.
+- `POST /api/tickets/{id}/escalate` raises priority one step, recomputes due date from the
+  escalation moment, keeps the current agent if still eligible, otherwise reassigns using the same
+  triage rules, and writes an immutable escalation history row in the same transaction.
+- Escalations record a fresh SLA start time so the derived `AtRisk` state is evaluated relative
+  to the escalation window, not the original creation time.
+- `GET /api/tickets?slaStatus=...` is implemented as a database-translatable predicate. The SQL
+  layer computes `NotApplicable`, `WithinSla`, `AtRisk`, `Breached`, and `Met` without calling the
+  in-memory evaluator inside a `WHERE` clause.
+- The UI reflects the shared SLA badge/state, exposes the SLA status filter, shows triage details
+  after create, and surfaces an escalation form with history and validation.
+- A final manual-assignment gap was fixed so the assignment endpoint also validates the same
+  specialist/capacity rules as triage and escalation instead of bypassing them.
+
+Verification and coverage:
+
+- Backend unit tests cover SLA windows, forced-critical categories, eligibility rules,
+  deterministic assignment, escalation history, and boundary conditions at the `AtRisk` threshold.
+- The SQL provider tests confirm the `slaStatus` filter is applied before paging and count logic,
+  with the same behavior across the SQLite and SQL Server execution paths.
+- The included `spec/task2-smoke.mjs` script validates create, escalation, specialist-capacity
+  behavior, 400/404/409 responses, and the database-side SLA filtering workflow against a fresh
+  disposable database.
+
+Configuration and persistence decisions:
+
+- Edit the existing `Sla` section in `appsettings.Development.json`, or supply process environment
+  variables such as `Sla__AtRiskThresholdPercent=25`. Restart the API after changing settings.
+  `dotnet run` does not automatically load the root `.env`; that file supplies Docker Compose.
+- The `TicketEscalationAndSlaStart` migration adds `TicketEscalations` and nullable
+  `Tickets.SlaStartedAtUtc`. Existing tickets fall back to creation time; escalation sets a new
+  start. SLA status itself is never stored. Development startup applies the migration automatically.
+- The `(TicketId, EscalatedAtUtc DESC, Id DESC)` index supports newest-first history for one ticket,
+  with a deterministic tie-break. Agent foreign-key indexes support the before/after relationships.
+  Restrict deletes preserve history. Private setters and DbContext save guards prevent application
+  updates/deletes of history; privileged direct SQL is outside that protection.
+- Eligibility uses the current open count, including the ticket being escalated. An owner at their
+  limit is ineligible even when retaining the same ticket. Reasons and actors are trimmed before
+  checking the 5–500 and 1–100 character limits, respectively.
+
+Known limitations: assignment capacity and escalation are not locked across concurrent requests;
+production would need a concurrency strategy. Escalation actors now come from the authenticated
+token. SLA states refresh on data requests, not a live timer. Browser automation was
+unavailable; component tests and real API checks cover behaviour but do not replace a visual review.
+The optional SLA report is deferred until Tasks 1–3 are complete.
+
+## Task 3: Authentication
+
+Start the database and restart the API with `npm run api`, then run `npm run web`.
+Development startup applies `AddAgentPasswordHash` and fills missing passwords for the six
+known demo agents, including an existing Task 2 database; no reset is needed and existing
+password hashes are preserved. Sign in at `/login` with:
+
+- Email: `alex.turner@northwind-support.example`
+- Password: `NorthwindDev!2026` (local development fixture only)
+
+The same fixture password works for the other active seeded agents; inactive Yuki cannot log in.
+Credentials live on `Agent` because an account is an agent in this assignment. The migration adds
+`PasswordHash`; ASP.NET Core Identity's vetted password hasher provides salted PBKDF2 hashes.
+No plaintext password is stored in the database or returned by the API.
+
+`POST /api/auth/login` returns a signed HS256 JWT, its UTC expiry, and the agent's ID/name/email.
+Wrong passwords, unknown emails and inactive agents receive the same 401 response.
+`GET /api/auth/me` returns the current active agent. A central fallback authorization policy
+protects API endpoints, including future ones; login and development Swagger remain public.
+Escalation accepts only `reason`; its actor is recorded as `Name (agent ID)` from validated claims.
+
+Tokens last **120 minutes** with no expiry grace period. Configure `Authentication__Jwt__Key`,
+`Authentication__Jwt__Issuer`, `Authentication__Jwt__Audience`, and
+`Authentication__Jwt__ExpiryMinutes` as process environment variables (see `.env.example`).
+The development configuration contains an explicitly public fixture key, not a production secret.
+There is no C# key fallback; startup rejects a missing/short key, missing issuer/audience, or invalid
+lifetime. `dotnet run` does not automatically import the root `.env` file.
+
+The browser keeps the token and agent in `localStorage` so reloads preserve login. This exposes
+the token to JavaScript and therefore XSS; a production design should consider HttpOnly cookies
+with appropriate CSRF protection. The shared API client attaches bearer tokens and clears rejected
+sessions on 401. Route guards preserve the requested path, query and fragment. Expiry and logout
+redirect to login, including across tabs. An old request cannot clear a newer login session.
+
+Verification: backend tests cover real hashing, authentication decisions, JWT expiry/configuration,
+and non-destructive seed upgrades. Frontend tests cover login, route guards, malformed/expired
+sessions, bearer headers, 401 redirects and logout. Run `npm test`, `npm run typecheck`, and
+`npm run lint`. For real HTTP checks, point `TASK3_API_URL` at a disposable development API and run
+`node spec/task3-smoke.mjs`; it creates/escalates a ticket. Both this script and the authenticated
+Task 2 smoke script passed against SQL Server. A production web build also passes.
+
+Known limitations: logout removes the browser token but does not revoke issued JWTs. Deactivating
+an agent prevents login and `/me` access; other endpoints accept an already-issued token until
+expiry. Production needs a private signing key, HTTPS, a revocation strategy, and consideration of
+rate limiting/lockout. Registration, password reset, refresh tokens, MFA and roles are intentionally
+outside this task.
+
+## Task 4: Docker API
+
+From the repository root, run `docker compose up --build -d`. This starts SQL Server, waits for
+its health check, then starts the API at **http://localhost:5080**. Development startup applies
+migrations and seeds the demo database. `/health` is public: `200 Healthy` means SQL Server is
+reachable; `503 Unhealthy` means it is unavailable. `/api/tickets` still requires a login token.
+
+Run the React app on the host against that API:
+
+```powershell
+$env:VITE_API_PROXY_TARGET = 'http://localhost:5080'
+npm run web
+```
+
+On Bash, use `VITE_API_PROXY_TARGET=http://localhost:5080 npm run web`.
+Sign in with the Task 3 credentials above. Swagger is at http://localhost:5080/swagger.
+Use `docker compose down` to stop; adding `-v` deletes the project's database volume.
+
+`apps/api/Dockerfile` restores project metadata before copying source, publishes with the .NET 10
+SDK, and copies only published output into the ASP.NET 10 runtime image. It runs as `app` on
+HTTP 8080. `.dockerignore` excludes build outputs, dependencies, Git, environment files, web
+sources, certificates and all appsettings files. Connection string, JWT settings and environment
+are supplied by Compose at runtime. The container connects to `sqlserver:1433`, regardless of
+the published host database port. It deliberately ignores the host-oriented connection string
+in `.env`. SQL Server and API ports are bound to loopback.
+
+Configuration is listed in `.env.example`: `MSSQL_SA_PASSWORD`, `ASPNETCORE_ENVIRONMENT`,
+`Authentication__Jwt__*`, plus optional `API_PORT` (5080) and `SQLSERVER_PORT` (1433).
+Defaults are public development fixtures. Other .NET settings, such as `Sla__*`, can be added
+to the API service's `environment` mapping when overriding the domain defaults.
+
+Verification performed on Docker Desktop with Linux amd64 containers:
+
+- Used an isolated `northwind-task4-verify` Compose project on ports 5087/1437, then ran
+  `docker compose -p northwind-task4-verify down -v` followed by `up --build -d` with those
+  port overrides. `spec/task4-smoke.mjs` confirmed anonymous health, anonymous API rejection,
+  successful login, and exactly 40 tickets, 6 agents, 6 customers and 5 categories.
+- Stopping that project's SQL Server changed `/health` to 503; restarting restored health.
+  Login and authenticated ticket requests also passed through Vite's proxy to the container.
+- After editing one `.cs` file, a plain-progress rebuild marked `dotnet restore` **CACHED**
+  and reran publish. `docker compose exec api whoami` returned **app**.
+- `docker image inspect --format '{{.Size}}'` measured the API image at approximately
+  **434 MiB**, compared with **1,243 MiB** for `mcr.microsoft.com/dotnet/sdk:10.0`
+  (about 65% smaller). These are local image sizes, not compressed downloads, and vary by tag.
+  Inspection found no appsettings, `.env` or PFX files in `/app`.
+- All 97 backend tests passed. Container restore reported NU1902/NU1903 advisories for the
+  existing transitive `System.Security.Cryptography.Pkcs` 9.0.11 dependency; dependency
+  remediation remains outstanding before production use.
+
+To repeat the non-mutating seed check against a fresh default stack, run
+`node spec/task4-smoke.mjs`. Set `TASK4_API_URL` when using another API port.
+
+Production would run reviewed migration scripts or an EF migration bundle as a separate deployment
+step, using credentials allowed to change schema. Application instances would use restricted
+credentials and `Production`, which disables startup migrations, demo seeding and Swagger.
+This avoids competing migrations across replicas and makes schema changes independently reviewable.
+Use private runtime secrets and terminate HTTPS outside this local HTTP container. Floating .NET
+and SQL Server tags are convenient here; production should pin and deliberately update image digests.
 
 ## Commands
 
@@ -87,9 +315,11 @@ Both pass on a clean checkout and neither needs a database.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
+| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters run in SQL before counting and paging. |
 | `GET /api/tickets/{id}` | One ticket |
-| `POST /api/tickets` | Create a ticket |
+| `POST /api/tickets` | Create and triage a ticket, returning decision reasons |
+| `POST /api/tickets/{id}/escalate` | Escalate with `reason`; actor comes from the token; returns updated ticket and history entry |
+| `GET /api/tickets/{id}/escalations` | Escalation history, newest first |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
