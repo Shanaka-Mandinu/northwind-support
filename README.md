@@ -98,10 +98,9 @@ Reads remain untracked with narrow projections. No schema changes or new indexes
 existing filter indexes remain in use as available to the query planner. Substring search can
 scan at scale; full-text search is a future decision, not part of this task.
 
-To add `slaStatus` in Task 2, extend the query contract and append a SQL-translatable predicate
-in `ApplyFilters`; the shared count/sort/page pipeline stays unchanged. Do not call the current
-C# SLA evaluator inside a WHERE clause. The frontend needs a typed field, API parameter and
-control, but no special fetching-effect wiring.
+Task 2 adds `slaStatus` through a SQL-translatable projection and a predicate in `ApplyFilters`;
+the count/sort/page pipeline is unchanged. The frontend adds its typed field, API parameter and
+control without special fetching-effect wiring.
 
 `TicketQueriesTests` runs 16 cases against in-memory SQLite by default, including exact matches,
 combinations, customer/title/reference search, literal wildcard characters, null assignment,
@@ -174,6 +173,28 @@ Verification and coverage:
   behavior, 400/404/409 responses, and the database-side SLA filtering workflow against a fresh
   disposable database.
 
+Configuration and persistence decisions:
+
+- Edit the existing `Sla` section in `appsettings.Development.json`, or supply process environment
+  variables such as `Sla__AtRiskThresholdPercent=25`. Restart the API after changing settings.
+  `dotnet run` does not automatically load the root `.env`; that file supplies Docker Compose.
+- The `TicketEscalationAndSlaStart` migration adds `TicketEscalations` and nullable
+  `Tickets.SlaStartedAtUtc`. Existing tickets fall back to creation time; escalation sets a new
+  start. SLA status itself is never stored. Development startup applies the migration automatically.
+- The `(TicketId, EscalatedAtUtc DESC, Id DESC)` index supports newest-first history for one ticket,
+  with a deterministic tie-break. Agent foreign-key indexes support the before/after relationships.
+  Restrict deletes preserve history. Private setters and DbContext save guards prevent application
+  updates/deletes of history; privileged direct SQL is outside that protection.
+- Eligibility uses the current open count, including the ticket being escalated. An owner at their
+  limit is ineligible even when retaining the same ticket. Reasons and actors are trimmed before
+  checking the 5–500 and 1–100 character limits, respectively.
+
+Known limitations: assignment capacity and escalation are not locked across concurrent requests;
+production would need a concurrency strategy. `escalatedBy` is supplied by the user until Task 3
+adds authentication. SLA states refresh on data requests, not a live timer. Browser automation was
+unavailable; component tests and real API checks cover behaviour but do not replace a visual review.
+The optional SLA report is deferred until Tasks 1–3 are complete.
+
 ## Commands
 
 | Command | What it does |
@@ -190,7 +211,9 @@ Verification and coverage:
 | --- | --- |
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters run in SQL before counting and paging. |
 | `GET /api/tickets/{id}` | One ticket |
-| `POST /api/tickets` | Create a ticket |
+| `POST /api/tickets` | Create and triage a ticket, returning decision reasons |
+| `POST /api/tickets/{id}/escalate` | Escalate with `reason` and `escalatedBy`; returns updated ticket and history entry |
+| `GET /api/tickets/{id}/escalations` | Escalation history, newest first |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
 
