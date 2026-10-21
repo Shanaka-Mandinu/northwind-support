@@ -190,10 +190,57 @@ Configuration and persistence decisions:
   checking the 5–500 and 1–100 character limits, respectively.
 
 Known limitations: assignment capacity and escalation are not locked across concurrent requests;
-production would need a concurrency strategy. `escalatedBy` is supplied by the user until Task 3
-adds authentication. SLA states refresh on data requests, not a live timer. Browser automation was
+production would need a concurrency strategy. Escalation actors now come from the authenticated
+token. SLA states refresh on data requests, not a live timer. Browser automation was
 unavailable; component tests and real API checks cover behaviour but do not replace a visual review.
 The optional SLA report is deferred until Tasks 1–3 are complete.
+
+## Task 3: Authentication
+
+Start the database and restart the API with `npm run api`, then run `npm run web`.
+Development startup applies `AddAgentPasswordHash` and fills missing passwords for the six
+known demo agents, including an existing Task 2 database; no reset is needed and existing
+password hashes are preserved. Sign in at `/login` with:
+
+- Email: `alex.turner@northwind-support.example`
+- Password: `NorthwindDev!2026` (local development fixture only)
+
+The same fixture password works for the other active seeded agents; inactive Yuki cannot log in.
+Credentials live on `Agent` because an account is an agent in this assignment. The migration adds
+`PasswordHash`; ASP.NET Core Identity's vetted password hasher provides salted PBKDF2 hashes.
+No plaintext password is stored in the database or returned by the API.
+
+`POST /api/auth/login` returns a signed HS256 JWT, its UTC expiry, and the agent's ID/name/email.
+Wrong passwords, unknown emails and inactive agents receive the same 401 response.
+`GET /api/auth/me` returns the current active agent. A central fallback authorization policy
+protects API endpoints, including future ones; login and development Swagger remain public.
+Escalation accepts only `reason`; its actor is recorded as `Name (agent ID)` from validated claims.
+
+Tokens last **120 minutes** with no expiry grace period. Configure `Authentication__Jwt__Key`,
+`Authentication__Jwt__Issuer`, `Authentication__Jwt__Audience`, and
+`Authentication__Jwt__ExpiryMinutes` as process environment variables (see `.env.example`).
+The development configuration contains an explicitly public fixture key, not a production secret.
+There is no C# key fallback; startup rejects a missing/short key, missing issuer/audience, or invalid
+lifetime. `dotnet run` does not automatically import the root `.env` file.
+
+The browser keeps the token and agent in `localStorage` so reloads preserve login. This exposes
+the token to JavaScript and therefore XSS; a production design should consider HttpOnly cookies
+with appropriate CSRF protection. The shared API client attaches bearer tokens and clears rejected
+sessions on 401. Route guards preserve the requested path, query and fragment. Expiry and logout
+redirect to login, including across tabs. An old request cannot clear a newer login session.
+
+Verification: backend tests cover real hashing, authentication decisions, JWT expiry/configuration,
+and non-destructive seed upgrades. Frontend tests cover login, route guards, malformed/expired
+sessions, bearer headers, 401 redirects and logout. Run `npm test`, `npm run typecheck`, and
+`npm run lint`. For real HTTP checks, point `TASK3_API_URL` at a disposable development API and run
+`node spec/task3-smoke.mjs`; it creates/escalates a ticket. Both this script and the authenticated
+Task 2 smoke script passed against SQL Server. A production web build also passes.
+
+Known limitations: logout removes the browser token but does not revoke issued JWTs. Deactivating
+an agent prevents login and `/me` access; other endpoints accept an already-issued token until
+expiry. Production needs a private signing key, HTTPS, a revocation strategy, and consideration of
+rate limiting/lockout. Registration, password reset, refresh tokens, MFA and roles are intentionally
+outside this task. Task 4 (Dockerising the API) remains unfinished.
 
 ## Commands
 
@@ -212,7 +259,7 @@ The optional SLA report is deferred until Tasks 1–3 are complete.
 | `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters run in SQL before counting and paging. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create and triage a ticket, returning decision reasons |
-| `POST /api/tickets/{id}/escalate` | Escalate with `reason` and `escalatedBy`; returns updated ticket and history entry |
+| `POST /api/tickets/{id}/escalate` | Escalate with `reason`; actor comes from the token; returns updated ticket and history entry |
 | `GET /api/tickets/{id}/escalations` | Escalation history, newest first |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |

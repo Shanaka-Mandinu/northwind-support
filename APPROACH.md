@@ -81,6 +81,33 @@ AI assistance was used to verify the implementation through the existing xUnit s
 smoke script, and to keep the decision-making transparent. The important constraint was to keep the
 business rules centralized and test the exact boundary conditions instead of hard-coding one-off fixes.
 
-## Tasks 3–4
+## Task 3: Authentication
+
+Kept the existing Agent credential model, Identity password hasher, migration, and authentication
+service instead of introducing a second user system. Completed authorization with a central fallback
+policy and explicit anonymous login; restored public development Swagger. Token creation uses the
+shared clock and returns the exact expiry encoded in the JWT. Configuration is validated at startup.
+
+The main upgrade issue was the seeder's early return when tickets already existed: migrated demo
+agents would have empty password hashes. Development seeding now backfills only missing hashes
+for known fixture agents and preserves existing credentials and ticket data. A regression test
+covers this upgrade and repeated startup.
+
+Escalation no longer accepts an actor from the form. The controller derives name and ID from the
+validated token and passes that identity to the handler. The existing history column remains useful
+as an audit snapshot, with no additional migration required.
+
+The browser session is a small shared store with same-tab and cross-tab notifications. Route guards,
+logout, token expiry and API 401 handling use it consistently. LocalStorage was retained for simplicity
+and reload persistence; its XSS exposure is documented rather than claiming it is secure cookie storage.
+
+AI assistance reviewed and improved the initial implementation and added behavioral checks. It found
+that a long-lived test session overflowed the browser timeout limit; expiry scheduling now caps each
+wait and checks again. The initial per-controller authorization and client-supplied escalation actor
+were replaced. Verification included backend tests, frontend tests/types/lint/build, and both Task 2
+and Task 3 HTTP smoke scripts against a disposable SQL Server database. No visual browser review
+was performed. The candidate should review these choices and be able to explain them independently.
+
+## Task 4
 
 Not implemented yet.
