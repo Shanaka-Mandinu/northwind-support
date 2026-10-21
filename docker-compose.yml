@@ -1,15 +1,30 @@
-# SQL Server for local development only. The password below is a throwaway local
-# placeholder - never commit a real credential.
+# Local development stack. Default credentials and JWT key are public fixtures.
 services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+      Authentication__Jwt__Key: "${Authentication__Jwt__Key:-development-only-key-change-me-for-real-use}"
+      Authentication__Jwt__Issuer: "${Authentication__Jwt__Issuer:-NorthwindSupport}"
+      Authentication__Jwt__Audience: "${Authentication__Jwt__Audience:-NorthwindSupportApp}"
+      Authentication__Jwt__ExpiryMinutes: "${Authentication__Jwt__ExpiryMinutes:-120}"
+    ports:
+      - "127.0.0.1:${API_PORT:-5080}:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: supportdesk-sql
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Local_Dev_Password1}"
       MSSQL_PID: Developer
     ports:
-      - "1433:1433"
+      - "127.0.0.1:${SQLSERVER_PORT:-1433}:1433"
     volumes:
       - supportdesk-sql:/var/opt/mssql
     healthcheck:

@@ -240,7 +240,66 @@ Known limitations: logout removes the browser token but does not revoke issued J
 an agent prevents login and `/me` access; other endpoints accept an already-issued token until
 expiry. Production needs a private signing key, HTTPS, a revocation strategy, and consideration of
 rate limiting/lockout. Registration, password reset, refresh tokens, MFA and roles are intentionally
-outside this task. Task 4 (Dockerising the API) remains unfinished.
+outside this task.
+
+## Task 4: Docker API
+
+From the repository root, run `docker compose up --build -d`. This starts SQL Server, waits for
+its health check, then starts the API at **http://localhost:5080**. Development startup applies
+migrations and seeds the demo database. `/health` is public: `200 Healthy` means SQL Server is
+reachable; `503 Unhealthy` means it is unavailable. `/api/tickets` still requires a login token.
+
+Run the React app on the host against that API:
+
+```powershell
+$env:VITE_API_PROXY_TARGET = 'http://localhost:5080'
+npm run web
+```
+
+On Bash, use `VITE_API_PROXY_TARGET=http://localhost:5080 npm run web`.
+Sign in with the Task 3 credentials above. Swagger is at http://localhost:5080/swagger.
+Use `docker compose down` to stop; adding `-v` deletes the project's database volume.
+
+`apps/api/Dockerfile` restores project metadata before copying source, publishes with the .NET 10
+SDK, and copies only published output into the ASP.NET 10 runtime image. It runs as `app` on
+HTTP 8080. `.dockerignore` excludes build outputs, dependencies, Git, environment files, web
+sources, certificates and all appsettings files. Connection string, JWT settings and environment
+are supplied by Compose at runtime. The container connects to `sqlserver:1433`, regardless of
+the published host database port. It deliberately ignores the host-oriented connection string
+in `.env`. SQL Server and API ports are bound to loopback.
+
+Configuration is listed in `.env.example`: `MSSQL_SA_PASSWORD`, `ASPNETCORE_ENVIRONMENT`,
+`Authentication__Jwt__*`, plus optional `API_PORT` (5080) and `SQLSERVER_PORT` (1433).
+Defaults are public development fixtures. Other .NET settings, such as `Sla__*`, can be added
+to the API service's `environment` mapping when overriding the domain defaults.
+
+Verification performed on Docker Desktop with Linux amd64 containers:
+
+- Used an isolated `northwind-task4-verify` Compose project on ports 5087/1437, then ran
+  `docker compose -p northwind-task4-verify down -v` followed by `up --build -d` with those
+  port overrides. `spec/task4-smoke.mjs` confirmed anonymous health, anonymous API rejection,
+  successful login, and exactly 40 tickets, 6 agents, 6 customers and 5 categories.
+- Stopping that project's SQL Server changed `/health` to 503; restarting restored health.
+  Login and authenticated ticket requests also passed through Vite's proxy to the container.
+- After editing one `.cs` file, a plain-progress rebuild marked `dotnet restore` **CACHED**
+  and reran publish. `docker compose exec api whoami` returned **app**.
+- `docker image inspect --format '{{.Size}}'` measured the API image at approximately
+  **434 MiB**, compared with **1,243 MiB** for `mcr.microsoft.com/dotnet/sdk:10.0`
+  (about 65% smaller). These are local image sizes, not compressed downloads, and vary by tag.
+  Inspection found no appsettings, `.env` or PFX files in `/app`.
+- All 97 backend tests passed. Container restore reported NU1902/NU1903 advisories for the
+  existing transitive `System.Security.Cryptography.Pkcs` 9.0.11 dependency; dependency
+  remediation remains outstanding before production use.
+
+To repeat the non-mutating seed check against a fresh default stack, run
+`node spec/task4-smoke.mjs`. Set `TASK4_API_URL` when using another API port.
+
+Production would run reviewed migration scripts or an EF migration bundle as a separate deployment
+step, using credentials allowed to change schema. Application instances would use restricted
+credentials and `Production`, which disables startup migrations, demo seeding and Swagger.
+This avoids competing migrations across replicas and makes schema changes independently reviewable.
+Use private runtime secrets and terminate HTTPS outside this local HTTP container. Floating .NET
+and SQL Server tags are convenient here; production should pin and deliberately update image digests.
 
 ## Commands
 
