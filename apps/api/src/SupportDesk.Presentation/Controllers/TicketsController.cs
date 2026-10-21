@@ -14,6 +14,19 @@ namespace SupportDesk.Presentation.Controllers;
 [Produces("application/json")]
 public sealed class TicketsController : ControllerBase
 {
+    [HttpPost("{id:int}/escalate")]
+    public Task<EscalationResultDto> Escalate(int id, EscalateTicketRequest request,
+        [FromServices] SupportDesk.Application.Features.Tickets.Commands.EscalateTicket.EscalateTicketCommandHandler handler,
+        CancellationToken ct) => handler.HandleAsync(id, request, ct);
+
+    [HttpGet("{id:int}/escalations")]
+    public async Task<IReadOnlyList<EscalationDto>> History(int id,
+        [FromServices] GetTicketQueryHandler getTicket,
+        [FromServices] SupportDesk.Application.Abstractions.IEscalationStore history, CancellationToken ct)
+    {
+        await getTicket.HandleAsync(id, ct);
+        return await history.GetHistoryAsync(id, ct);
+    }
     /// <summary>Searches tickets with filters, sorting and paging.</summary>
     [HttpGet]
     public Task<PagedResult<TicketListItemDto>> Search(

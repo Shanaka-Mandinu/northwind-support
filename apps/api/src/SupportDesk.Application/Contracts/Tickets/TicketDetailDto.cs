@@ -7,6 +7,7 @@ namespace SupportDesk.Application.Contracts.Tickets;
 /// </summary>
 public sealed class TicketDetailDto
 {
+    public TriageDto? Triage { get; set; }
     public int Id { get; set; }
 
     public string Reference { get; set; } = string.Empty;

@@ -29,6 +29,7 @@ describe('useTicketList requests', () => {
   });
 
   it.each<[Partial<TicketFilters>, string, string]>([
+    [{ slaStatus: 'AtRisk' }, 'slaStatus', 'AtRisk'],
     [{ status: 'InProgress' }, 'status', 'InProgress'],
     [{ priority: 'High' }, 'priority', 'High'],
     [{ categoryId: 2 }, 'categoryId', '2'],
