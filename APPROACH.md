@@ -110,4 +110,20 @@ was performed. The candidate should review these choices and be able to explain 
 
 ## Task 4
 
-Not implemented yet.
+The API image uses separate SDK and ASP.NET runtime stages. Project metadata is copied before
+source so source-only edits reuse NuGet restore. Appsettings and environment files are excluded
+from the context instead of copied then deleted, so fixture settings do not enter image layers.
+Compose supplies configuration at runtime and connects to SQL Server by service name.
+
+Kept the existing development-only migration and seeding flow. Compose waits for SQL Server's
+health check before starting the API. A built-in ASP.NET health endpoint checks database
+connectivity using a scoped DbContext; its anonymous exception is declared centrally alongside
+endpoint mapping. All business endpoints remain protected by the fallback authorization policy.
+
+Removed the fixed SQL container name and made host ports configurable so verification could use
+an isolated Compose project without touching existing development data. AI assistance implemented
+the files and exercised clean-volume startup, seed counts, authentication, database outage and
+recovery, non-root execution, image contents and sizes, restore cache reuse, and the Vite proxy.
+The test stack is disposable. The README records measured results and the dependency advisory
+reported by container restore. Production migration orchestration, image pinning, and secret
+management are documented deployment concerns rather than extra infrastructure in this assignment.

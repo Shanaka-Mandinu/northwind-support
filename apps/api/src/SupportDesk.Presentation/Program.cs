@@ -9,6 +9,7 @@ using SupportDesk.Application.Contracts.Auth;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
+using SupportDesk.Presentation.Health;
 using SupportDesk.Presentation.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -84,6 +85,8 @@ sla.Validate();
 builder.Services.AddSingleton(sla);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", timeout: TimeSpan.FromSeconds(5));
 
 var app = builder.Build();
 
@@ -102,5 +105,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+// This is the only public operational endpoint; API authorization remains the default.
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();
