@@ -134,6 +134,46 @@ npm test                      # dotnet test, then the web tests (Vitest)
 
 Both pass on a clean checkout and neither needs a database.
 
+### Task 2: Ticket escalation & assignment
+
+Task 2 implements the shared triage rules that drive both ticket creation and escalation.
+The core design is a single `TriagePolicy` + `SlaSettings` model used everywhere: priority,
+SLA windows, specialist checks, and assignment selection all resolve through the same logic.
+That keeps automatic triage, manual assignment, and escalation consistent instead of duplicating
+business rules in separate handlers.
+
+Key implementation details:
+
+- `POST /api/tickets` now applies priority, due-date calculation, and agent assignment as part of
+  the creation flow. Categories with `ForcesCriticalPriority` always become `Critical`, and a
+  category requiring a specialist can only be assigned to an eligible specialist.
+- Assignment uses a deterministic selection rule: among active agents with capacity and required
+  specialization, choose the fewest open tickets; ties select the lowest agent ID.
+- If no eligible agent exists, the ticket is still created with HTTP 201 and an explanatory
+  triage reason instead of failing the request.
+- `POST /api/tickets/{id}/escalate` raises priority one step, recomputes due date from the
+  escalation moment, keeps the current agent if still eligible, otherwise reassigns using the same
+  triage rules, and writes an immutable escalation history row in the same transaction.
+- Escalations record a fresh SLA start time so the derived `AtRisk` state is evaluated relative
+  to the escalation window, not the original creation time.
+- `GET /api/tickets?slaStatus=...` is implemented as a database-translatable predicate. The SQL
+  layer computes `NotApplicable`, `WithinSla`, `AtRisk`, `Breached`, and `Met` without calling the
+  in-memory evaluator inside a `WHERE` clause.
+- The UI reflects the shared SLA badge/state, exposes the SLA status filter, shows triage details
+  after create, and surfaces an escalation form with history and validation.
+- A final manual-assignment gap was fixed so the assignment endpoint also validates the same
+  specialist/capacity rules as triage and escalation instead of bypassing them.
+
+Verification and coverage:
+
+- Backend unit tests cover SLA windows, forced-critical categories, eligibility rules,
+  deterministic assignment, escalation history, and boundary conditions at the `AtRisk` threshold.
+- The SQL provider tests confirm the `slaStatus` filter is applied before paging and count logic,
+  with the same behavior across the SQLite and SQL Server execution paths.
+- The included `spec/task2-smoke.mjs` script validates create, escalation, specialist-capacity
+  behavior, 400/404/409 responses, and the database-side SLA filtering workflow against a fresh
+  disposable database.
+
 ## Commands
 
 | Command | What it does |

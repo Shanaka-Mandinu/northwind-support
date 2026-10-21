@@ -34,6 +34,53 @@ AI assistance continued with the query implementation and test fixtures. Accepte
 conditional WHERE composition; rejected relying on mocks alone to claim SQL correctness.
 Actual execution on both providers and SQL interception verified the generated queries.
 
-## Tasks 2–4
+## Task 2 — Ticket escalation & assignment
+
+Task 2 was implemented as a shared business-rule layer rather than separate rules scattered across
+handlers. The main design choice was to keep the policy in `TriagePolicy` and `SlaSettings` and let
+both the create flow and the escalate flow call the same logic. That mattered because the rules for
+priority, due dates, specialist checks, reassignment, and SLA status were all coupled to the same
+source of truth.
+
+The first rule was to separate pure domain decisions from database access. The domain model decides
+which agent is eligible and which priority window applies; the application layer fetches candidate
+agents and stores the escalation record. This keeps the logic easy to test and prevents the SQL layer
+from depending on an in-memory SLA evaluator.
+
+For ticket creation, the domain policy calculates the requested priority, applies forced-critical
+categories, and selects the best agent among active candidates that have spare capacity and the
+required specialization. The result includes a human-readable triage reason so the API can explain
+why the ticket was unassigned or why a specific agent won the assignment.
+
+For escalation, the same policy was reused to decide if the current ticket owner should stay in place
+or if a new agent should be selected. The escalation handler raises the priority one step, recalculates
+its due date from the escalation timestamp, and persists the before/after priority and agent changes in
+an immutable history row. The escalation is done in a single transaction so the ticket update and the
+history row are committed together.
+
+A key behavioral detail was the SLA reset during escalation: the code stores a new SLA start time when
+escalating, which means the derived `AtRisk` status is based on the current escalation window instead of
+an older creation-time baseline. That was the required interpretation of the business rule and matched
+the tests for precise threshold boundaries.
+
+The final gap was manual assignment. The assignment endpoint originally bypassed the specialist and
+capacity checks; that was fixed so it uses the same eligibility rule as automatic triage and escalation.
+This prevents a manual override from undoing a valid automatic assignment or violating the category's
+specialist requirements.
+
+The database side was also made consistent with the domain model. The SLA status filter was built as a
+SQL-translatable predicate in `TicketQueries`, so `GET /api/tickets?slaStatus=...` works before paging
+and counting. This keeps the filter behavior in the database and avoids calling the domain evaluator in
+`WHERE` clauses.
+
+UI work then connected to the same backend contract: the SLA badge/status filter, triage details after
+creation, and the escalation form/history panel all read from the same model and rules. The result is a
+single user experience across the list, detail page, and escalation flow.
+
+AI assistance was used to verify the implementation through the existing xUnit suite and the Task 2
+smoke script, and to keep the decision-making transparent. The important constraint was to keep the
+business rules centralized and test the exact boundary conditions instead of hard-coding one-off fixes.
+
+## Tasks 3–4
 
 Not implemented yet.
